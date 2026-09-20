@@ -71,27 +71,37 @@ Preference match raw score: {score_breakdown.get('preference_match', {}).get('ra
 
 
 def _groq_explanation(prompt: str) -> str:
-    if not settings.GROQ_API_KEY:
+    key_configured = bool(settings.GROQ_API_KEY)
+    logger.info("Groq explanation attempt: key_configured=%s", key_configured)
+    if not key_configured:
         raise RuntimeError("GROQ_API_KEY is not configured")
-    response = httpx.post(
-        GROQ_ENDPOINT,
-        headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
-        json={
-            "model": GROQ_MODEL,
-            "temperature": 0.2,
-            "max_tokens": 180,
-            "messages": [
-                {"role": "system", "content": "You write concise, factual internship recommendation explanations."},
-                {"role": "user", "content": prompt},
-            ],
-        },
-        timeout=5.0,
-    )
-    response.raise_for_status()
-    content = response.json()["choices"][0]["message"]["content"]
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("Groq returned empty explanation")
-    return content.strip()
+    request_body = {
+        "model": GROQ_MODEL,
+        "temperature": 0.2,
+        "max_completion_tokens": 180,
+        "messages": [
+            {"role": "system", "content": "You write concise, factual internship recommendation explanations."},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        response = httpx.post(
+            GROQ_ENDPOINT,
+            headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+            json=request_body,
+            timeout=5.0,
+        )
+        logger.info("Groq explanation response: status_code=%s", response.status_code)
+        if response.is_error:
+            logger.error("Groq API error response: status_code=%s body=%s", response.status_code, response.text[:4000])
+        response.raise_for_status()
+        content = response.json()["choices"][0]["message"]["content"]
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Groq returned empty explanation")
+        return content.strip()
+    except Exception as exc:
+        logger.exception("Groq explanation request failed: exception_type=%s message=%s", type(exc).__name__, exc)
+        raise
 
 
 def generate_explanation(
@@ -113,5 +123,5 @@ def generate_explanation(
             missing_critical_skills, missing_important_skills, score_breakdown,
         ))
     except Exception as exc:  # fallback must shield the API from all provider failures
-        logger.warning("Groq explanation unavailable; using template fallback: %s", exc)
+        logger.warning("Groq explanation unavailable; using template fallback: exception_type=%s message=%s", type(exc).__name__, exc)
         return fallback
