@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.database import SessionLocal, get_db
 from app.models import CareerPath, Internship, InternshipSkill, Recommendation, Student, StudentSkill
+from app.nlp.explanation import generate_explanation
 from app.recommendation.engine import Profile, profile_from_student, recommend
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
@@ -57,11 +58,16 @@ def internship_json(internship: Internship) -> dict[str, Any]:
 
 
 def response_json(result: dict[str, Any]) -> dict[str, Any]:
+    detail = result["_skill_detail"]
     return {
         "internship": internship_json(result["internship"]),
         "match_score": result["match_score"], "readiness_score": result["readiness_score"],
         "status": result["status"].value,
         "score_breakdown": result["score_breakdown"],
+        "why_recommended": result["why_recommended"],
+        "matched_skills": detail["matched_skills"],
+        "missing_critical_skills": detail["missing_critical_skills"],
+        "missing_important_skills": detail["missing_important_skills"],
     }
 
 
@@ -90,15 +96,48 @@ def create_recommendations(payload: RecommendationRequest, db: Session = Depends
     results = recommend(profile, internships, payload.limit)
 
     if student is not None:
+        existing_rows = db.scalars(
+            select(Recommendation)
+            .where(
+                Recommendation.student_id == student.id,
+                Recommendation.internship_id.in_([result["internship"].id for result in results]),
+            )
+            .order_by(Recommendation.created_at.desc(), Recommendation.id.desc())
+        ).all()
+        existing_by_internship: dict[int, Recommendation] = {}
+        for row in existing_rows:
+            existing_by_internship.setdefault(row.internship_id, row)
         for result in results:
-            db.add(Recommendation(
-                student_id=student.id,
-                internship_id=result["internship"].id,
-                match_score=result["match_score"],
-                readiness_score=result["readiness_score"],
-                status=result["status"],
-                score_breakdown=result["score_breakdown"],
-            ))
+            existing = existing_by_internship.get(result["internship"].id)
+            if existing is not None and existing.explanation_text:
+                result["why_recommended"] = existing.explanation_text
+                continue
+            result["why_recommended"] = generate_explanation(
+                result["internship"], result["match_score"], result["status"].value,
+                result["_skill_detail"]["matched_skills"],
+                result["_skill_detail"]["missing_critical_skills"],
+                result["_skill_detail"]["missing_important_skills"], result["score_breakdown"],
+            )
+            if existing is not None:
+                existing.explanation_text = result["why_recommended"]
+            else:
+                db.add(Recommendation(
+                    student_id=student.id,
+                    internship_id=result["internship"].id,
+                    match_score=result["match_score"],
+                    readiness_score=result["readiness_score"],
+                    status=result["status"],
+                    score_breakdown=result["score_breakdown"],
+                    explanation_text=result["why_recommended"],
+                ))
         db.commit()
+    else:
+        for result in results:
+            result["why_recommended"] = generate_explanation(
+                result["internship"], result["match_score"], result["status"].value,
+                result["_skill_detail"]["matched_skills"],
+                result["_skill_detail"]["missing_critical_skills"],
+                result["_skill_detail"]["missing_important_skills"], result["score_breakdown"],
+            )
 
     return {"recommendations": [response_json(result) for result in results]}

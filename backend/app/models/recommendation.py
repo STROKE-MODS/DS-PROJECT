@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, JSON, String, func
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -25,6 +25,7 @@ class Recommendation(Base):
     readiness_score: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[RecommendationStatus] = mapped_column(Enum(RecommendationStatus, name="recommendation_status"), nullable=False)
     score_breakdown: Mapped[dict | None] = mapped_column(JSON)
+    explanation_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
 
     student: Mapped[Student] = relationship(back_populates="recommendations")

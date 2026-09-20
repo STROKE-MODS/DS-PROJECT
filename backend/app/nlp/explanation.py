@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+
+def _names(items: list[dict[str, str]]) -> str:
+    return ", ".join(item["skill_name"] for item in items) or "none"
+
+
+def template_explanation(
+    internship: Any,
+    score: float,
+    status: str,
+    matched_skills: list[dict[str, str]],
+    missing_critical_skills: list[str],
+    missing_important_skills: list[str],
+    score_breakdown: dict[str, dict[str, float]],
+) -> str:
+    matched = _names(matched_skills)
+    critical = ", ".join(missing_critical_skills) or "none"
+    important = ", ".join(missing_important_skills) or "none"
+    reasons: list[str] = []
+    if matched_skills:
+        reasons.append(f"your matched skills include {matched}")
+    if score_breakdown.get("career_alignment", {}).get("raw", 0) > 0:
+        reasons.append("it aligns with your career direction")
+    if score_breakdown.get("location_match", {}).get("raw", 0) > 0:
+        reasons.append("its location or work mode fits your preferences")
+    reason_text = "; ".join(reasons) or "its overall profile is a reasonable starting point"
+    improvement = f" To become a stronger candidate, build {critical} first"
+    if not missing_critical_skills and missing_important_skills:
+        improvement = f" You could further strengthen your application with {important}"
+    elif not missing_critical_skills and not missing_important_skills:
+        improvement = " You already cover the listed skill requirements"
+    return f"This {internship.sector or 'internship'} recommendation scored {score:.1f} ({status}) because {reason_text}.{improvement}."
+
+
+def build_prompt(
+    internship: Any,
+    score: float,
+    status: str,
+    matched_skills: list[dict[str, str]],
+    missing_critical_skills: list[str],
+    missing_important_skills: list[str],
+    score_breakdown: dict[str, dict[str, float]],
+) -> str:
+    return f"""Write one or two concise sentences explaining why this internship was recommended.
+Use only the facts supplied below. Do not invent experience, achievements, company details, or skills.
+Mention matched skills accurately; semantic matches are related skills, not exact matches. If critical skills are missing, say what the student should build to become stronger.
+
+Internship: {internship.title} at {internship.company}
+Sector: {internship.sector or 'not specified'}
+Final match score: {score:.1f}
+Status: {status}
+Matched skills: {matched_skills or 'none'}
+Missing critical skills: {missing_critical_skills or 'none'}
+Missing important skills: {missing_important_skills or 'none'}
+Career alignment raw score: {score_breakdown.get('career_alignment', {}).get('raw', 0)}
+Location match raw score: {score_breakdown.get('location_match', {}).get('raw', 0)}
+Preference match raw score: {score_breakdown.get('preference_match', {}).get('raw', 0)}
+"""
+
+
+def _groq_explanation(prompt: str) -> str:
+    if not settings.GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not configured")
+    response = httpx.post(
+        GROQ_ENDPOINT,
+        headers={"Authorization": f"Bearer {settings.GROQ_API_KEY}"},
+        json={
+            "model": GROQ_MODEL,
+            "temperature": 0.2,
+            "max_tokens": 180,
+            "messages": [
+                {"role": "system", "content": "You write concise, factual internship recommendation explanations."},
+                {"role": "user", "content": prompt},
+            ],
+        },
+        timeout=5.0,
+    )
+    response.raise_for_status()
+    content = response.json()["choices"][0]["message"]["content"]
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("Groq returned empty explanation")
+    return content.strip()
+
+
+def generate_explanation(
+    internship: Any,
+    score: float,
+    status: str,
+    matched_skills: list[dict[str, str]],
+    missing_critical_skills: list[str],
+    missing_important_skills: list[str],
+    score_breakdown: dict[str, dict[str, float]],
+) -> str:
+    fallback = template_explanation(
+        internship, score, status, matched_skills,
+        missing_critical_skills, missing_important_skills, score_breakdown,
+    )
+    try:
+        return _groq_explanation(build_prompt(
+            internship, score, status, matched_skills,
+            missing_critical_skills, missing_important_skills, score_breakdown,
+        ))
+    except Exception as exc:  # fallback must shield the API from all provider failures
+        logger.warning("Groq explanation unavailable; using template fallback: %s", exc)
+        return fallback

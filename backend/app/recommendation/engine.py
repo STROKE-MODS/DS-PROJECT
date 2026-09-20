@@ -61,21 +61,31 @@ def _skill_keys(skill) -> set[str]:
     return {_norm(skill.name), *(_norm(alias) for alias in (skill.aliases or []))}
 
 
-def _skill_match(profile: Profile, internship: Internship) -> float:
+def _skill_match_detail(profile: Profile, internship: Internship) -> tuple[float, dict[str, list]]:
     student_names = _student_skill_names(profile)
     embeddings = profile.skill_embeddings or {}
     required = [link for link in internship.skills if link.requirement_level == RequirementLevel.required]
     preferred = [link for link in internship.skills if link.requirement_level == RequirementLevel.preferred]
+    matched_skills: list[dict[str, str]] = []
+    missing_critical_skills: list[str] = []
+    missing_important_skills: list[str] = []
+
     def credit(link) -> float:
         if student_names & _skill_keys(link.skill):
+            matched_skills.append({"skill_name": link.skill.name, "match_type": "exact"})
             return 1.0
         if not link.skill.embedding:
+            (missing_critical_skills if link.requirement_level == RequirementLevel.required else missing_important_skills).append(link.skill.name)
             return 0.0
         for skill_name in student_names:
             if skill_name not in embeddings:
                 embeddings[skill_name] = embed_text(skill_name)
         highest = max((cosine_similarity(embeddings[name], link.skill.embedding) for name in student_names), default=0.0)
-        return SEMANTIC_MATCH_CREDIT if highest >= SEMANTIC_MATCH_THRESHOLD else 0.0
+        if highest >= SEMANTIC_MATCH_THRESHOLD:
+            matched_skills.append({"skill_name": link.skill.name, "match_type": "semantic"})
+            return SEMANTIC_MATCH_CREDIT
+        (missing_critical_skills if link.requirement_level == RequirementLevel.required else missing_important_skills).append(link.skill.name)
+        return 0.0
 
     matched_required = sum(credit(link) for link in required)
     matched_preferred = sum(credit(link) for link in preferred)
@@ -83,10 +93,20 @@ def _skill_match(profile: Profile, internship: Internship) -> float:
     preferred_ratio = matched_preferred / len(preferred) if preferred else 0.0
     # Required skills carry 70% of this component and preferred skills 30%.
     if required and preferred:
-        return (required_ratio * 0.7 + preferred_ratio * 0.3) * 100
-    if required:
-        return required_ratio * 100
-    return preferred_ratio * 100
+        score = (required_ratio * 0.7 + preferred_ratio * 0.3) * 100
+    elif required:
+        score = required_ratio * 100
+    else:
+        score = preferred_ratio * 100
+    return score, {
+        "matched_skills": matched_skills,
+        "missing_critical_skills": missing_critical_skills,
+        "missing_important_skills": missing_important_skills,
+    }
+
+
+def _skill_match(profile: Profile, internship: Internship) -> float:
+    return _skill_match_detail(profile, internship)[0]
 
 
 def _career_alignment(profile: Profile, internship: Internship) -> float:
@@ -162,8 +182,9 @@ def _status(score: float) -> RecommendationStatus:
 
 
 def score_internship(profile: Profile, internship: Internship, embedding_index: InternshipEmbeddingIndex | None = None, interest_scores: dict[int, float] | None = None) -> dict[str, Any]:
+    skill_score, skill_detail = _skill_match_detail(profile, internship)
     raw = {
-        "skill_match": _skill_match(profile, internship),
+        "skill_match": skill_score,
         "career_alignment": _career_alignment(profile, internship),
         "interest_match": _interest_match(profile, internship, embedding_index, interest_scores),
         "location_match": _location_match(profile, internship),
@@ -180,7 +201,11 @@ def score_internship(profile: Profile, internship: Internship, embedding_index: 
     }
     breakdown = {name: {"raw": value, "weighted": value * weights[name]} for name, value in raw.items()}
     final_score = min(100.0, max(0.0, sum(item["weighted"] for item in breakdown.values())))
-    return {"match_score": round(final_score, 2), "readiness_score": 70.0, "status": _status(final_score), "score_breakdown": breakdown}
+    return {
+        "match_score": round(final_score, 2), "readiness_score": 70.0,
+        "status": _status(final_score), "score_breakdown": breakdown,
+        "_skill_detail": skill_detail,
+    }
 
 
 def recommend(profile: Profile, internships: list[Internship], limit: int = 5) -> list[dict[str, Any]]:
