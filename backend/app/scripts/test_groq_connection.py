@@ -6,7 +6,9 @@ import sys
 import httpx
 
 from app.core.config import settings
-from app.nlp.explanation import GROQ_ENDPOINT, GROQ_MODEL
+from app.nlp.explanation import GROQ_ENDPOINT
+
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 
 def main() -> int:
