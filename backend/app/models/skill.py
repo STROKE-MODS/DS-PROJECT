@@ -20,6 +20,7 @@ class Skill(Base):
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     category: Mapped[str | None] = mapped_column(String(100))
     aliases: Mapped[list[str] | None] = mapped_column(JSON)
+    embedding: Mapped[list[float] | None] = mapped_column(JSON)
 
     student_skills: Mapped[list[StudentSkill]] = relationship(back_populates="skill")
     internship_skills: Mapped[list[InternshipSkill]] = relationship(back_populates="skill")

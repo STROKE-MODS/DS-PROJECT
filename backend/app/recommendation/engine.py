@@ -14,8 +14,11 @@ from app.recommendation.config import (
     LOCATION_MATCH_WEIGHT,
     PREFERENCE_MATCH_WEIGHT,
     READINESS_WEIGHT,
+    SEMANTIC_MATCH_CREDIT,
+    SEMANTIC_MATCH_THRESHOLD,
     SKILL_MATCH_WEIGHT,
 )
+from app.recommendation.semantic import cosine_similarity, embed_text
 
 
 @dataclass
@@ -26,6 +29,7 @@ class Profile:
     interests: list[str] | None = None
     preferences: dict[str, Any] | None = None
     career_goal_id: int | None = None
+    skill_embeddings: dict[str, list[float]] | None = None
 
 
 def profile_from_student(student: Student) -> Profile:
@@ -36,6 +40,7 @@ def profile_from_student(student: Student) -> Profile:
         interests=student.interests or [],
         preferences=student.preferences or {},
         career_goal_id=student.career_goal_id,
+        skill_embeddings={_norm(skill.skill.name): skill.skill.embedding for skill in student.skills if skill.skill.embedding},
     )
 
 
@@ -43,11 +48,8 @@ def _norm(value: Any) -> str:
     return str(value).strip().casefold()
 
 
-def _student_skill_names(profile: Profile, internship: Internship) -> set[str]:
-    names: set[str] = set()
-    for supplied in profile.skills:
-        names.add(_norm(supplied))
-    return names
+def _student_skill_names(profile: Profile) -> set[str]:
+    return {_norm(supplied) for supplied in profile.skills}
 
 
 def _skill_keys(skill) -> set[str]:
@@ -55,11 +57,23 @@ def _skill_keys(skill) -> set[str]:
 
 
 def _skill_match(profile: Profile, internship: Internship) -> float:
-    student_names = _student_skill_names(profile, internship)
+    student_names = _student_skill_names(profile)
+    embeddings = profile.skill_embeddings or {}
+    for skill_name in student_names:
+        if skill_name not in embeddings:
+            embeddings[skill_name] = embed_text(skill_name)
     required = [link for link in internship.skills if link.requirement_level == RequirementLevel.required]
     preferred = [link for link in internship.skills if link.requirement_level == RequirementLevel.preferred]
-    matched_required = sum(bool(student_names & _skill_keys(link.skill)) for link in required)
-    matched_preferred = sum(bool(student_names & _skill_keys(link.skill)) for link in preferred)
+    def credit(link) -> float:
+        if student_names & _skill_keys(link.skill):
+            return 1.0
+        if not link.skill.embedding:
+            return 0.0
+        highest = max((cosine_similarity(embeddings[name], link.skill.embedding) for name in student_names), default=0.0)
+        return SEMANTIC_MATCH_CREDIT if highest >= SEMANTIC_MATCH_THRESHOLD else 0.0
+
+    matched_required = sum(credit(link) for link in required)
+    matched_preferred = sum(credit(link) for link in preferred)
     required_ratio = matched_required / len(required) if required else 0.0
     preferred_ratio = matched_preferred / len(preferred) if preferred else 0.0
     # Required skills carry 70% of this component and preferred skills 30%.
@@ -91,7 +105,12 @@ def _interest_match(profile: Profile, internship: Internship) -> float:
     if not interests:
         return 0.0
     text = _norm(f"{internship.sector or ''} {internship.description or ''}")
-    matched = sum(_norm(interest) in text for interest in interests)
+    matched = 0
+    if internship.description_embedding:
+        for interest in interests:
+            interest_embedding = embed_text(interest)
+            similarity = cosine_similarity(interest_embedding, internship.description_embedding)
+            matched += similarity >= SEMANTIC_MATCH_THRESHOLD
     return matched / len(interests) * 100
 
 
