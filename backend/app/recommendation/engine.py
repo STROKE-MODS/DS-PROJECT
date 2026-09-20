@@ -118,7 +118,7 @@ def _preference_match(profile: Profile, internship: Internship) -> float:
     preferences = profile.preferences or {}
     scores: list[float] = []
     if preferences.get("work_mode"):
-        scores.append(100.0 if _norm(preferences["work_mode"]) == _norm(internship.work_mode) else 0.0)
+        scores.append(100.0 if _norm(preferences["work_mode"]) == _norm(internship.work_mode.value if internship.work_mode else "") else 0.0)
     if preferences.get("duration"):
         scores.append(100.0 if _norm(preferences["duration"]) == _norm(internship.duration) else 0.0)
     return sum(scores) / len(scores) if scores else 0.0
