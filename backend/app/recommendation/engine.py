@@ -24,6 +24,7 @@ from app.recommendation.semantic import (
     embed_text,
     prepare_internship_embedding_index,
 )
+from app.recommendation.readiness import calculate_readiness
 
 
 @dataclass
@@ -35,6 +36,7 @@ class Profile:
     preferences: dict[str, Any] | None = None
     career_goal_id: int | None = None
     skill_embeddings: dict[str, list[float]] | None = None
+    certificates: list[str] | None = None
 
 
 def profile_from_student(student: Student) -> Profile:
@@ -46,6 +48,7 @@ def profile_from_student(student: Student) -> Profile:
         preferences=student.preferences or {},
         career_goal_id=student.career_goal_id,
         skill_embeddings={_norm(skill.skill.name): skill.skill.embedding for skill in student.skills if skill.skill.embedding},
+        certificates=[certificate.name for certificate in student.certificates],
     )
 
 
@@ -87,8 +90,11 @@ def _skill_match_detail(profile: Profile, internship: Internship) -> tuple[float
         (missing_critical_skills if link.requirement_level == RequirementLevel.required else missing_important_skills).append(link.skill.name)
         return 0.0
 
-    matched_required = sum(credit(link) for link in required)
-    matched_preferred = sum(credit(link) for link in preferred)
+    # Preserve the exact single-pass per-skill credits for Phase 6 readiness.
+    required_skill_credits = [credit(link) for link in required]
+    preferred_skill_credits = [credit(link) for link in preferred]
+    matched_required = sum(required_skill_credits)
+    matched_preferred = sum(preferred_skill_credits)
     required_ratio = matched_required / len(required) if required else 0.0
     preferred_ratio = matched_preferred / len(preferred) if preferred else 0.0
     # Required skills carry 70% of this component and preferred skills 30%.
@@ -102,6 +108,7 @@ def _skill_match_detail(profile: Profile, internship: Internship) -> tuple[float
         "matched_skills": matched_skills,
         "missing_critical_skills": missing_critical_skills,
         "missing_important_skills": missing_important_skills,
+        "required_skill_credits": required_skill_credits,
     }
 
 
@@ -172,11 +179,10 @@ def _preference_match(profile: Profile, internship: Internship) -> float:
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def _status(score: float) -> RecommendationStatus:
-    # TODO(Phase 6): Separate match-score status from real readiness status.
-    if score >= APPLY_NOW_THRESHOLD:
+def _status(score: float, readiness_score: float) -> RecommendationStatus:
+    if readiness_score >= APPLY_NOW_THRESHOLD and score >= APPLY_NOW_THRESHOLD:
         return RecommendationStatus.apply_now
-    if score >= APPLY_UPSKILL_THRESHOLD:
+    if readiness_score >= APPLY_UPSKILL_THRESHOLD:
         return RecommendationStatus.apply_upskill
     return RecommendationStatus.prepare_first
 
@@ -191,8 +197,8 @@ def score_internship(profile: Profile, internship: Internship, embedding_index: 
         "education_eligibility": _education_score(profile, internship),
         "preference_match": _preference_match(profile, internship),
     }
-    # TODO(Phase 6): Replace with real readiness engine per spec Section 10.
-    raw["readiness"] = 70.0
+    readiness_score, readiness_components = calculate_readiness(profile, internship, skill_detail)
+    raw["readiness"] = readiness_score
     weights = {
         "skill_match": SKILL_MATCH_WEIGHT, "career_alignment": CAREER_ALIGNMENT_WEIGHT,
         "interest_match": INTEREST_MATCH_WEIGHT, "location_match": LOCATION_MATCH_WEIGHT,
@@ -202,8 +208,9 @@ def score_internship(profile: Profile, internship: Internship, embedding_index: 
     breakdown = {name: {"raw": value, "weighted": value * weights[name]} for name, value in raw.items()}
     final_score = min(100.0, max(0.0, sum(item["weighted"] for item in breakdown.values())))
     return {
-        "match_score": round(final_score, 2), "readiness_score": 70.0,
-        "status": _status(final_score), "score_breakdown": breakdown,
+        "match_score": round(final_score, 2), "readiness_score": round(readiness_score, 2),
+        "status": _status(final_score, readiness_score), "score_breakdown": breakdown,
+        "_readiness_components": readiness_components,
         "_skill_detail": skill_detail,
     }
 
