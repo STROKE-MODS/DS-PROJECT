@@ -18,7 +18,12 @@ from app.recommendation.config import (
     SEMANTIC_MATCH_THRESHOLD,
     SKILL_MATCH_WEIGHT,
 )
-from app.recommendation.semantic import cosine_similarity, embed_text
+from app.recommendation.semantic import (
+    InternshipEmbeddingIndex,
+    cosine_similarity,
+    embed_text,
+    prepare_internship_embedding_index,
+)
 
 
 @dataclass
@@ -59,9 +64,6 @@ def _skill_keys(skill) -> set[str]:
 def _skill_match(profile: Profile, internship: Internship) -> float:
     student_names = _student_skill_names(profile)
     embeddings = profile.skill_embeddings or {}
-    for skill_name in student_names:
-        if skill_name not in embeddings:
-            embeddings[skill_name] = embed_text(skill_name)
     required = [link for link in internship.skills if link.requirement_level == RequirementLevel.required]
     preferred = [link for link in internship.skills if link.requirement_level == RequirementLevel.preferred]
     def credit(link) -> float:
@@ -69,6 +71,9 @@ def _skill_match(profile: Profile, internship: Internship) -> float:
             return 1.0
         if not link.skill.embedding:
             return 0.0
+        for skill_name in student_names:
+            if skill_name not in embeddings:
+                embeddings[skill_name] = embed_text(skill_name)
         highest = max((cosine_similarity(embeddings[name], link.skill.embedding) for name in student_names), default=0.0)
         return SEMANTIC_MATCH_CREDIT if highest >= SEMANTIC_MATCH_THRESHOLD else 0.0
 
@@ -100,16 +105,20 @@ def _career_alignment(profile: Profile, internship: Internship) -> float:
     return 0.0
 
 
-def _interest_match(profile: Profile, internship: Internship) -> float:
+def _interest_match(profile: Profile, internship: Internship, embedding_index: InternshipEmbeddingIndex | None = None, precomputed: dict[int, float] | None = None) -> float:
     interests = profile.interests or []
     if not interests:
         return 0.0
-    text = _norm(f"{internship.sector or ''} {internship.description or ''}")
+    if precomputed is not None:
+        return precomputed.get(internship.id, 0.0)
     matched = 0
     if internship.description_embedding:
         for interest in interests:
             interest_embedding = embed_text(interest)
-            similarity = cosine_similarity(interest_embedding, internship.description_embedding)
+            if embedding_index is None:
+                similarity = cosine_similarity(interest_embedding, internship.description_embedding)
+            else:
+                similarity = embedding_index.similarity(internship.id, interest_embedding)
             matched += similarity >= SEMANTIC_MATCH_THRESHOLD
     return matched / len(interests) * 100
 
@@ -152,11 +161,11 @@ def _status(score: float) -> RecommendationStatus:
     return RecommendationStatus.prepare_first
 
 
-def score_internship(profile: Profile, internship: Internship) -> dict[str, Any]:
+def score_internship(profile: Profile, internship: Internship, embedding_index: InternshipEmbeddingIndex | None = None, interest_scores: dict[int, float] | None = None) -> dict[str, Any]:
     raw = {
         "skill_match": _skill_match(profile, internship),
         "career_alignment": _career_alignment(profile, internship),
-        "interest_match": _interest_match(profile, internship),
+        "interest_match": _interest_match(profile, internship, embedding_index, interest_scores),
         "location_match": _location_match(profile, internship),
         "education_eligibility": _education_score(profile, internship),
         "preference_match": _preference_match(profile, internship),
@@ -176,9 +185,20 @@ def score_internship(profile: Profile, internship: Internship) -> dict[str, Any]
 
 def recommend(profile: Profile, internships: list[Internship], limit: int = 5) -> list[dict[str, Any]]:
     eligible = [item for item in internships if profile.year_of_study is None or item.min_year is None or item.min_year <= profile.year_of_study]
+    embedding_index = prepare_internship_embedding_index(internships)
+    interest_scores: dict[int, float] = {}
+    if profile.interests:
+        match_counts = sum(
+            embedding_index.similarities(embed_text(interest)) >= SEMANTIC_MATCH_THRESHOLD
+            for interest in profile.interests
+        )
+        interest_scores = {
+            internship.id: float(match_counts[index] / len(profile.interests) * 100)
+            for index, internship in enumerate(internships)
+        }
     results = []
     for internship in eligible:
-        scored = score_internship(profile, internship)
+        scored = score_internship(profile, internship, embedding_index, interest_scores)
         results.append({"internship": internship, **scored})
     results.sort(key=lambda result: (-result["match_score"], result["internship"].id))
     return results[:limit]

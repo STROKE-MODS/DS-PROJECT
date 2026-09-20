@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,11 +8,25 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.database import get_db
-from app.models import Internship, InternshipSkill, Recommendation, Student, StudentSkill
+from app.core.database import SessionLocal, get_db
+from app.models import CareerPath, Internship, InternshipSkill, Recommendation, Student, StudentSkill
 from app.recommendation.engine import Profile, profile_from_student, recommend
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
+
+
+@lru_cache(maxsize=1)
+def cached_internships() -> tuple[Internship, ...]:
+    """Load all recommendation inputs once; embeddings remain process-local thereafter."""
+    with SessionLocal() as session:
+        return tuple(session.scalars(
+            select(Internship)
+            .options(
+                selectinload(Internship.skills).selectinload(InternshipSkill.skill),
+                selectinload(Internship.career_path).selectinload(CareerPath.previous_steps),
+            )
+            .order_by(Internship.id)
+        ).all())
 
 
 class AdHocProfile(BaseModel):
@@ -71,13 +86,7 @@ def create_recommendations(payload: RecommendationRequest, db: Session = Depends
     else:
         profile = Profile(**payload.profile.model_dump())
 
-    internships = db.scalars(
-        select(Internship)
-        .options(
-            selectinload(Internship.skills).selectinload(InternshipSkill.skill),
-        )
-        .order_by(Internship.id)
-    ).all()
+    internships = cached_internships()
     results = recommend(profile, internships, payload.limit)
 
     if student is not None:
