@@ -51,6 +51,8 @@ STUDENTS = [
         "education_level": "Undergraduate", "degree": "B.Tech",
         "branch": "Computer Science", "year_of_study": 3, "location": "Bengaluru",
         "career": "Data Scientist",
+        "interests": ["AI", "Data Science", "Machine Learning"],
+        "preferences": {"location": "Bengaluru", "work_mode": "hybrid", "duration": "6 months"},
         "skills": [("Python", ProficiencyLevel.advanced), ("SQL", ProficiencyLevel.intermediate), ("Pandas", ProficiencyLevel.intermediate), ("Git", ProficiencyLevel.intermediate)],
     },
     {
@@ -58,6 +60,8 @@ STUDENTS = [
         "education_level": "Undergraduate", "degree": "B.Sc.",
         "branch": "Statistics", "year_of_study": 2, "location": "Pune",
         "career": "Data Analyst",
+        "interests": ["Analytics", "Finance", "Visualization"],
+        "preferences": {"location": "Pune", "work_mode": "onsite", "duration": "3 months"},
         "skills": [("Excel", ProficiencyLevel.advanced), ("Statistics", ProficiencyLevel.intermediate), ("Tableau", ProficiencyLevel.beginner), ("Communication", ProficiencyLevel.advanced)],
     },
     {
@@ -65,6 +69,8 @@ STUDENTS = [
         "education_level": "Undergraduate", "degree": "B.Tech",
         "branch": "Information Technology", "year_of_study": 4, "location": "Hyderabad",
         "career": "ML Engineer",
+        "interests": ["AI", "Cloud", "Cybersecurity"],
+        "preferences": {"location": "Remote", "work_mode": "remote", "duration": None},
         "skills": [("Python", ProficiencyLevel.advanced), ("Machine Learning", ProficiencyLevel.intermediate), ("TensorFlow", ProficiencyLevel.beginner), ("NumPy", ProficiencyLevel.advanced), ("Problem Solving", ProficiencyLevel.advanced)],
     },
 ]
@@ -103,8 +109,10 @@ def seed() -> None:
         for student_data in STUDENTS:
             student = get_or_create(
                 session, Student, {"email": student_data["email"]},
-                {**{key: student_data[key] for key in ("name", "education_level", "degree", "branch", "year_of_study", "location")}, "career_goal": paths[student_data["career"]]},
+                {**{key: student_data[key] for key in ("name", "education_level", "degree", "branch", "year_of_study", "location", "interests", "preferences")}, "career_goal": paths[student_data["career"]]},
             )
+            student.interests = student_data["interests"]
+            student.preferences = student_data["preferences"]
             for skill_name, proficiency in student_data["skills"]:
                 if session.scalar(select(StudentSkill).filter_by(student_id=student.id, skill_id=skills[skill_name].id)) is None:
                     session.add(StudentSkill(student=student, skill=skills[skill_name], proficiency=proficiency, source=SkillSource.manual))

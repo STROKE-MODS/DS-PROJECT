@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import JSON, Date, DateTime, Enum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -27,6 +27,8 @@ class Student(Base):
     branch: Mapped[str | None] = mapped_column(String(255))
     year_of_study: Mapped[int | None] = mapped_column(Integer)
     location: Mapped[str | None] = mapped_column(String(255))
+    interests: Mapped[list[str] | None] = mapped_column(JSON)
+    preferences: Mapped[dict | None] = mapped_column(JSON)
     career_goal_id: Mapped[int | None] = mapped_column(ForeignKey("career_paths.id"))
     resume_text: Mapped[str | None] = mapped_column(Text)
     resume_file_path: Mapped[str | None] = mapped_column(String(500))
