@@ -78,7 +78,7 @@ def _groq_explanation(prompt: str) -> str:
     request_body = {
         "model": GROQ_MODEL,
         "temperature": 0.2,
-        "max_completion_tokens": 180,
+        "max_completion_tokens": 350,
         "messages": [
             {"role": "system", "content": "You write concise, factual internship recommendation explanations."},
             {"role": "user", "content": prompt},
@@ -95,9 +95,15 @@ def _groq_explanation(prompt: str) -> str:
         if response.is_error:
             logger.error("Groq API error response: status_code=%s body=%s", response.status_code, response.text[:4000])
         response.raise_for_status()
-        content = response.json()["choices"][0]["message"]["content"]
+        payload = response.json()
+        choice = payload.get("choices", [{}])[0]
+        message = choice.get("message", {})
+        content = message.get("content")
+        finish_reason = choice.get("finish_reason")
+        content_present = isinstance(content, str) and bool(content.strip())
+        logger.info("Groq explanation completion: finish_reason=%s content_present=%s", finish_reason, content_present)
         if not isinstance(content, str) or not content.strip():
-            raise ValueError("Groq returned empty explanation")
+            raise ValueError(f"Groq returned empty explanation (finish_reason={finish_reason})")
         return content.strip()
     except Exception as exc:
         logger.exception("Groq explanation request failed: exception_type=%s message=%s", type(exc).__name__, exc)

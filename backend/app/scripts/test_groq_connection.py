@@ -24,7 +24,7 @@ def main() -> int:
     body = {
         "model": GROQ_MODEL,
         "temperature": 0.2,
-        "max_completion_tokens": 80,
+        "max_completion_tokens": 350,
         "messages": [
             {"role": "system", "content": "You write concise, factual internship explanations."},
             {"role": "user", "content": "In one sentence, explain why Python is useful for a data internship."},
