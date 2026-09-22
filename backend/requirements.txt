@@ -7,3 +7,5 @@ pydantic-settings
 alembic
 sentence-transformers
 httpx
+PyMuPDF
+python-multipart

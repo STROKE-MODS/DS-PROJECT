@@ -32,6 +32,7 @@ class Student(Base):
     career_goal_id: Mapped[int | None] = mapped_column(ForeignKey("career_paths.id"))
     resume_text: Mapped[str | None] = mapped_column(Text)
     resume_file_path: Mapped[str | None] = mapped_column(String(500))
+    projects: Mapped[list[dict] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
