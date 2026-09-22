@@ -12,6 +12,7 @@ from app.core.database import SessionLocal, get_db
 from app.models import CareerPath, Internship, InternshipSkill, Recommendation, Student, StudentSkill
 from app.nlp.explanation import generate_explanation
 from app.recommendation.engine import Profile, profile_from_student, recommend
+from app.recommendation.preparation import enrich_result
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 
@@ -24,6 +25,7 @@ def cached_internships() -> tuple[Internship, ...]:
             select(Internship)
             .options(
                 selectinload(Internship.skills).selectinload(InternshipSkill.skill),
+                selectinload(Internship.career_path).selectinload(CareerPath.next_step),
                 selectinload(Internship.career_path).selectinload(CareerPath.previous_steps),
             )
             .order_by(Internship.id)
@@ -68,6 +70,8 @@ def response_json(result: dict[str, Any]) -> dict[str, Any]:
         "matched_skills": detail["matched_skills"],
         "missing_critical_skills": detail["missing_critical_skills"],
         "missing_important_skills": detail["missing_important_skills"],
+        "optional_skills": result["optional_skills"],
+        "preparation_plan": result["preparation_plan"],
     }
 
 
@@ -139,5 +143,16 @@ def create_recommendations(payload: RecommendationRequest, db: Session = Depends
                 result["_skill_detail"]["missing_critical_skills"],
                 result["_skill_detail"]["missing_important_skills"], result["score_breakdown"],
             )
+
+    for result in results:
+        enrich_result(
+            result,
+            profile,
+            internships,
+            db=db if student is not None else None,
+            student_id=student.id if student is not None else None,
+        )
+    if student is not None:
+        db.commit()
 
     return {"recommendations": [response_json(result) for result in results]}
