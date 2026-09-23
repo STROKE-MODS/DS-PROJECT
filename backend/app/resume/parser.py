@@ -170,9 +170,10 @@ RESUME TEXT:
 """
 
 
-def _llm_extract(resume_text: str) -> dict[str, Any]:
+def _llm_extract(resume_text: str, diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
     if not settings.GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY is not configured")
+    prompt = _resume_prompt(resume_text)
     body = {
         "model": GROQ_MODEL,
         "temperature": 0.0,
@@ -183,9 +184,17 @@ def _llm_extract(resume_text: str) -> dict[str, Any]:
                 "role": "system",
                 "content": "You extract only explicit resume facts. Respond with valid JSON matching the requested shape.",
             },
-            {"role": "user", "content": _resume_prompt(resume_text)},
+            {"role": "user", "content": prompt},
         ],
     }
+    if diagnostics is not None:
+        diagnostics.update({
+            "resume_text": resume_text,
+            "prompt": prompt,
+            "request_body_without_auth": body,
+        })
+    logger.info("Resume PDF extracted text BEGIN\n%s\nResume PDF extracted text END", resume_text)
+    logger.info("Resume Groq prompt BEGIN\n%s\nResume Groq prompt END", prompt)
     logger.info("Resume Groq extraction attempt: key_configured=%s model=%s", bool(settings.GROQ_API_KEY), GROQ_MODEL)
     response = httpx.post(
         GROQ_ENDPOINT,
@@ -194,6 +203,10 @@ def _llm_extract(resume_text: str) -> dict[str, Any]:
         timeout=GROQ_TIMEOUT_SECONDS,
     )
     logger.info("Resume Groq extraction response: status_code=%s", response.status_code)
+    logger.info("Resume Groq raw response BEGIN\n%s\nResume Groq raw response END", response.text)
+    if diagnostics is not None:
+        diagnostics["http_status"] = response.status_code
+        diagnostics["raw_response_text"] = response.text
     if response.is_error:
         logger.error("Resume Groq API error: status_code=%s body=%s", response.status_code, response.text[:4000])
     response.raise_for_status()
@@ -203,9 +216,18 @@ def _llm_extract(resume_text: str) -> dict[str, Any]:
     if not isinstance(content, str) or not content.strip():
         raise ValueError(f"Groq returned empty resume extraction (finish_reason={choice.get('finish_reason')})")
     parsed = json.loads(content)
+    if diagnostics is not None:
+        diagnostics["parsed_json"] = parsed
+    logger.info("Resume Groq parsed JSON: %s", json.dumps(parsed, ensure_ascii=False))
     normalised = _normalise_profile(parsed)
     if normalised is None:
         raise ValueError("Groq resume extraction did not match the required JSON shape")
+    if diagnostics is not None:
+        diagnostics["normalized_profile"] = normalised
+    logger.info(
+        "Resume extraction arrays after normalization: skills=%d projects=%d certificates=%d",
+        len(normalised["skills"]), len(normalised["projects"]), len(normalised["certificates"]),
+    )
     return normalised
 
 
@@ -224,4 +246,26 @@ def extract_resume_profile(resume_text: str, db: Session) -> tuple[dict[str, Any
         return profile, "rule_based"
 
 
-__all__ = ["extract_resume_profile"]
+def extract_resume_profile_diagnostic(
+    resume_text: str, db: Session,
+) -> tuple[dict[str, Any], str, dict[str, Any]]:
+    """Run extraction once and return key-safe request/response diagnostics for local debugging."""
+    diagnostics: dict[str, Any] = {}
+    try:
+        profile = _llm_extract(resume_text, diagnostics)
+        logger.info("Resume diagnostic extraction completed: method=llm")
+        return profile, "llm", diagnostics
+    except Exception as exc:
+        diagnostics["error_type"] = type(exc).__name__
+        diagnostics["error_message"] = str(exc)
+        logger.warning(
+            "Resume diagnostic Groq extraction unavailable; using rule_based fallback: exception_type=%s message=%s",
+            type(exc).__name__, exc,
+        )
+        profile = _rule_based_extract(resume_text, db)
+        diagnostics["normalized_profile"] = profile
+        logger.info("Resume diagnostic extraction completed: method=rule_based")
+        return profile, "rule_based", diagnostics
+
+
+__all__ = ["extract_resume_profile", "extract_resume_profile_diagnostic"]
