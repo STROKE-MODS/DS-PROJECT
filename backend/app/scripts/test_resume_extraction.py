@@ -7,7 +7,11 @@ from pathlib import Path
 
 from app.core.database import SessionLocal
 from app.resume.extraction import extract_pdf_text
-from app.resume.parser import extract_resume_profile_diagnostic
+from app.resume.parser import (
+    RESUME_MAX_COMPLETION_TOKENS,
+    RESUME_REASONING_EFFORT,
+    extract_resume_profile_diagnostic,
+)
 
 
 def main() -> None:
@@ -21,6 +25,10 @@ def main() -> None:
     print(json.dumps({
         "extraction_method": method,
         "draft_profile": profile,
+        "request_configuration": {
+            "max_completion_tokens": RESUME_MAX_COMPLETION_TOKENS,
+            "reasoning_effort": RESUME_REASONING_EFFORT,
+        },
         "diagnostics": diagnostics,
     }, indent=2, ensure_ascii=False))
 

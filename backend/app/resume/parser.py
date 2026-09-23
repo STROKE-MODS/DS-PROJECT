@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-20b"
 GROQ_TIMEOUT_SECONDS = 8.0
+RESUME_MAX_COMPLETION_TOKENS = 3000
+RESUME_REASONING_EFFORT = "low"
 
 EMPTY_PROFILE: dict[str, Any] = {
     "skills": [],
@@ -177,7 +179,8 @@ def _llm_extract(resume_text: str, diagnostics: dict[str, Any] | None = None) ->
     body = {
         "model": GROQ_MODEL,
         "temperature": 0.0,
-        "max_completion_tokens": 1000,
+        "max_completion_tokens": RESUME_MAX_COMPLETION_TOKENS,
+        "reasoning_effort": RESUME_REASONING_EFFORT,
         "response_format": {"type": "json_object"},
         "messages": [
             {
