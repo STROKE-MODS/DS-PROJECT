@@ -12,6 +12,7 @@ from app.core.database import SessionLocal, get_db
 from app.models import CareerPath, Internship, InternshipSkill, Recommendation, Student, StudentSkill
 from app.nlp.explanation import generate_explanation
 from app.recommendation.engine import Profile, profile_from_student, recommend
+from app.recommendation.personalization import build_personalization_policy
 from app.recommendation.preparation import enrich_result
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
@@ -72,6 +73,7 @@ def response_json(result: dict[str, Any]) -> dict[str, Any]:
         "missing_important_skills": detail["missing_important_skills"],
         "optional_skills": result["optional_skills"],
         "preparation_plan": result["preparation_plan"],
+        "personalization_adjustments": result.get("personalization_adjustments", []),
     }
 
 
@@ -93,11 +95,13 @@ def create_recommendations(payload: RecommendationRequest, db: Session = Depends
         if student is None:
             raise HTTPException(status_code=404, detail="Student not found")
         profile = profile_from_student(student)
+        personalization = build_personalization_policy(student.id, db)
     else:
         profile = Profile(**payload.profile.model_dump())
+        personalization = None
 
     internships = cached_internships()
-    results = recommend(profile, internships, payload.limit)
+    results = recommend(profile, internships, payload.limit, personalization=personalization)
 
     if student is not None:
         existing_rows = db.scalars(

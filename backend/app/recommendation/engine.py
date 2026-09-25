@@ -17,6 +17,7 @@ from app.recommendation.config import (
     SEMANTIC_MATCH_CREDIT,
     SEMANTIC_MATCH_THRESHOLD,
     SKILL_MATCH_WEIGHT,
+    FEEDBACK_TOO_DIFFICULT_PENALTY,
 )
 from app.recommendation.semantic import (
     InternshipEmbeddingIndex,
@@ -25,6 +26,7 @@ from app.recommendation.semantic import (
     prepare_internship_embedding_index,
 )
 from app.recommendation.readiness import calculate_readiness
+from app.recommendation.personalization import PersonalizationPolicy
 
 
 @dataclass
@@ -215,8 +217,21 @@ def score_internship(profile: Profile, internship: Internship, embedding_index: 
     }
 
 
-def recommend(profile: Profile, internships: list[Internship], limit: int = 5) -> list[dict[str, Any]]:
-    eligible = [item for item in internships if profile.year_of_study is None or item.min_year is None or item.min_year <= profile.year_of_study]
+def recommend(
+    profile: Profile,
+    internships: list[Internship],
+    limit: int = 5,
+    personalization: PersonalizationPolicy | None = None,
+) -> list[dict[str, Any]]:
+    candidates = internships
+    if personalization is not None:
+        candidates = [
+            item for item in internships
+            if item.id not in personalization.excluded_internship_ids
+            and item.sector not in personalization.excluded_sectors
+            and item.location not in personalization.excluded_locations
+        ]
+    eligible = [item for item in candidates if profile.year_of_study is None or item.min_year is None or item.min_year <= profile.year_of_study]
     embedding_index = prepare_internship_embedding_index(internships)
     interest_scores: dict[int, float] = {}
     if profile.interests:
@@ -231,6 +246,17 @@ def recommend(profile: Profile, internships: list[Internship], limit: int = 5) -
     results = []
     for internship in eligible:
         scored = score_internship(profile, internship, embedding_index, interest_scores)
+        adjustments: list[dict[str, Any]] = []
+        if personalization is not None:
+            sector_penalty = personalization.penalized_sectors.get(internship.sector or "", 0)
+            if sector_penalty:
+                scored["match_score"] = round(max(0.0, scored["match_score"] - sector_penalty), 2)
+                adjustments.append({"type": "sector_penalty", "reason": "not_interested", "points": -sector_penalty})
+            if personalization.too_difficult_flag and scored["readiness_score"] < 60:
+                scored["match_score"] = round(max(0.0, scored["match_score"] - FEEDBACK_TOO_DIFFICULT_PENALTY), 2)
+                adjustments.append({"type": "readiness_penalty", "reason": "too_difficult", "points": -FEEDBACK_TOO_DIFFICULT_PENALTY})
+            scored["status"] = _status(scored["match_score"], scored["readiness_score"])
+        scored["personalization_adjustments"] = adjustments
         results.append({"internship": internship, **scored})
     results.sort(key=lambda result: (-result["match_score"], result["internship"].id))
     return results[:limit]
