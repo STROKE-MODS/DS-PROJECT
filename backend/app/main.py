@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+from app.api.auth import router as auth_router
 from app.api.internships import router as internships_router
 from app.api.career_paths import router as career_paths_router
 from app.api.feedback import router as feedback_router
@@ -23,6 +24,7 @@ app.add_middleware(
 )
 
 app.include_router(students_router)
+app.include_router(auth_router)
 app.include_router(career_paths_router)
 app.include_router(feedback_router)
 app.include_router(internships_router)
